@@ -44,16 +44,16 @@ The project is structured to allow easy expansion for additional parsing capabil
 ## Running the Application
 
 ### Via npm Script
-
-    ```bash
-    npm run dev http://autify.com https://www.google.com -- --metadata --mirror
-    ```
+   
+   ```bash
+   npm run dev http://autify.com https://www.google.com -- --metadata --mirror
+   ```
 
 ### Direct Execution
 
-    ```bash
-    ./dist/fetch http://autify.com https://www.google.com --metadata --mirror
-    ```
+   ```bash
+   ./dist/fetch http://autify.com https://www.google.com --metadata --mirror
+   ```
 
 ### Via Docker
 
