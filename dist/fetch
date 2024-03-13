@@ -1,0 +1,173 @@
+#!/usr/bin/env node
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const axios_1 = __importDefault(require("axios"));
+const cheerio_1 = __importDefault(require("cheerio"));
+const puppeteer_1 = __importDefault(require("puppeteer"));
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const os_1 = __importDefault(require("os"));
+const yargs_1 = __importDefault(require("yargs"));
+const helpers_1 = require("yargs/helpers");
+const defaultOutputDirectory = os_1.default.homedir();
+const outputDirectory = process.env.OUTPUT_DIRECTORY ?? defaultOutputDirectory;
+console.log(`Using output directory: ${outputDirectory}`); // Log the output directory being used
+/**
+ * Configures command line arguments using yargs.
+ */
+const argv = (0, yargs_1.default)((0, helpers_1.hideBin)(process.argv))
+    .option("metadata", {
+    alias: "m",
+    type: "boolean",
+    description: "Fetch and display metadata",
+    default: false,
+})
+    .option("mirror", {
+    alias: "mirror",
+    type: "boolean",
+    description: "Mirror the content",
+    default: false,
+})
+    .parseSync();
+console.log("Yargs configuration complete. Metadata:", argv.metadata, "Mirror:", argv.mirror); // Log command line arguments
+/**
+ * Fetches and parses the content of a given URL.
+ * @param {string} url - The URL to fetch and parse.
+ * @param {boolean} [metadata=false] - Whether to fetch and display metadata.
+ */
+async function fetchAndParseURL(url, metadata = false) {
+    if (!isValidUrl(url)) {
+        console.log(`Invalid URL skipped: ${url}`);
+        return;
+    }
+    console.log(`Processing URL: ${url}`);
+    try {
+        const { data } = await axios_1.default.get(url);
+        console.log(`Data fetched for URL: ${url}`);
+        const $ = cheerio_1.default.load(data);
+        if (metadata) {
+            const siteMetadata = {
+                site: url,
+                num_links: $("a").length,
+                images: $("img").length,
+                last_fetch: new Date().toUTCString(),
+            };
+            console.log("Metadata:", siteMetadata);
+        }
+        const filename = path_1.default.join(outputDirectory, extractDomainName(url) + ".html");
+        fs_1.default.writeFileSync(filename, $.html(), "utf-8");
+        console.log(`Content saved: ${filename}`);
+    }
+    catch (error) {
+        console.error(`An error occurred while fetching ${url}: `, error);
+    }
+}
+/**
+ * Validates a given URL.
+ * @param {string} urlString - The URL to validate.
+ * @returns {boolean} True if the URL is valid, false otherwise.
+ */
+function isValidUrl(urlString) {
+    if (!urlString) {
+        return false;
+    }
+    try {
+        new URL(urlString);
+        return true;
+    }
+    catch (error) {
+        return false;
+    }
+}
+/**
+ * Mirrors the content and assets of a given URL using Puppeteer.
+ * @param {string} url - The URL to mirror.
+ */
+async function mirror(url) {
+    console.log(`Starting mirroring for URL: ${url}`);
+    const browser = await puppeteer_1.default.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: "networkidle0" });
+    console.log(`Page loaded for mirroring: ${url}`);
+    const content = await page.content();
+    const urlObj = new URL(url);
+    const dirPath = path_1.default.join(outputDirectory, urlObj.hostname);
+    if (!fs_1.default.existsSync(dirPath)) {
+        fs_1.default.mkdirSync(dirPath, { recursive: true });
+        console.log(`Directory created: ${dirPath}`);
+    }
+    const indexPath = path_1.default.join(dirPath, "index.html");
+    fs_1.default.writeFileSync(indexPath, content);
+    console.log(`Main content saved: ${indexPath}`);
+    const assets = await page.evaluate(() => {
+        const urls = [];
+        document
+            .querySelectorAll('img, link[rel="stylesheet"], script')
+            .forEach((element) => {
+            if (element instanceof HTMLImageElement && element.src) {
+                urls.push(element.src);
+            }
+            else if (element instanceof HTMLLinkElement && element.href) {
+                urls.push(element.href);
+            }
+            else if (element instanceof HTMLScriptElement && element.src) {
+                urls.push(element.src);
+            }
+        });
+        return urls;
+    });
+    for (const assetUrl of assets) {
+        if (!assetUrl.startsWith("http://") && !assetUrl.startsWith("https://")) {
+            console.error(`Skipping invalid asset URL: ${assetUrl}`);
+            continue;
+        }
+        try {
+            const response = await page.goto(assetUrl);
+            if (response) {
+                const buffer = await response.buffer();
+                const assetPath = path_1.default.join(dirPath, new URL(assetUrl).pathname);
+                fs_1.default.mkdirSync(path_1.default.dirname(assetPath), { recursive: true }); // Make sure the directory exists
+                fs_1.default.writeFileSync(assetPath, buffer);
+                console.log(`Asset saved: ${assetPath}`);
+            }
+            else {
+                console.error(`No response received for asset: ${assetUrl}`);
+            }
+        }
+        catch (error) {
+            console.error(`Failed to download asset: ${assetUrl}`, error);
+        }
+    }
+    await browser.close();
+    console.log(`Mirroring completed for URL: ${url}`);
+}
+/**
+ * The main function to run the script. Processes URLs provided via CLI for content and optionally mirroring.
+ */
+async function main() {
+    const urls = argv._;
+    console.log("Starting processing with URLs:", urls);
+    const fetchPromises = urls.map((url) => fetchAndParseURL(url, argv.metadata));
+    await Promise.all(fetchPromises);
+    if (argv.mirror) {
+        console.log("Starting mirroring process...");
+        const mirrorPromises = urls.map((url) => mirror(url));
+        await Promise.all(mirrorPromises);
+        console.log("Mirroring process completed.");
+    }
+}
+/**
+ * Extracts the domain name from a URL.
+ * @param {string} url - The URL to extract the domain from.
+ * @returns {string} The extracted domain name.
+ */
+function extractDomainName(url) {
+    return new URL(url).hostname;
+}
+main();
